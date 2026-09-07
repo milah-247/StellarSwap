@@ -8,7 +8,7 @@ token pair — think Uniswap V2, ported to Soroban's storage and auth model.
 - **Contract:** [`src/lib.rs`](src/lib.rs) (`ConstantProductPool`)
 - **Tests:** [`src/test.rs`](src/test.rs) — 21 tests, `cargo test`
 - **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- **Live on testnet:** [`CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ`](https://stellar.expert/explorer/testnet/contract/CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ) — see [Live testnet deployment](#live-testnet-deployment)
+- **Live on testnet:** [`CBSSUBBWTD5AFNNSUULN63BEEB3VAQJLZB7Y3RNHG25ICRGPW54MJG3T`](https://stellar.expert/explorer/testnet/contract/CBSSUBBWTD5AFNNSUULN63BEEB3VAQJLZB7Y3RNHG25ICRGPW54MJG3T) — see [Live Testnet Deployment](#live-testnet-deployment)
 
 ## Contents
 
@@ -20,7 +20,7 @@ token pair — think Uniswap V2, ported to Soroban's storage and auth model.
 - [Events](#events)
 - [Building and testing](#building-and-testing)
 - [Deploying to Stellar testnet](#deploying-to-stellar-testnet)
-  - [Live testnet deployment](#live-testnet-deployment)
+- [Live Testnet Deployment](#live-testnet-deployment)
 - [Design notes and known limitations](#design-notes-and-known-limitations)
 
 ## Architecture
@@ -443,31 +443,31 @@ v28, though it doesn't sign/submit anything:
 stellar contract invoke --id stellarswap_pool --source alice --network testnet -- get_reserves
 ```
 
-### Live testnet deployment
+## Live Testnet Deployment
 
-The steps above were run against Stellar testnet on 2026-09-07. Everything
-below is a real, currently-live contract instance — click through to
-Stellar Expert to inspect it directly:
+**Deployed:** 2026-09-07, on Stellar **testnet** (not mainnet — do not send
+real assets to these addresses).
+
+The steps in [Deploying to Stellar testnet](#deploying-to-stellar-testnet)
+were run start-to-finish to produce this instance. One deviation from that
+walkthrough: the ledger rejects minting an asset to its own issuer
+(`operation invalid on issuer`) — a base Stellar rule, not a bug in this
+contract — so instead of alice *and* bob both holding a balance, alice
+stayed the pure issuer/deployer and `bob` is the sole liquidity provider
+and trader below.
 
 | | Contract ID | Explorer |
 |---|---|---|
-| **Pool** (`ConstantProductPool`) | `CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ) |
-| Token A (`TOKA`, SAC) | `CCAI4UENTRZ4A27JEPLEB4E4EIUQDVCF5JWSLYEJYPSOAZYEDQJYAZ2M` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CCAI4UENTRZ4A27JEPLEB4E4EIUQDVCF5JWSLYEJYPSOAZYEDQJYAZ2M) |
-| Token B (`TOKB`, SAC) | `CC2VND6OK53S4NBHKDCU2QR3KA3HJJFB2H7APOJ6KKEB6JSMTUNNS3IT` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CC2VND6OK53S4NBHKDCU2QR3KA3HJJFB2H7APOJ6KKEB6JSMTUNNS3IT) |
+| **Pool** (`ConstantProductPool`) | `CBSSUBBWTD5AFNNSUULN63BEEB3VAQJLZB7Y3RNHG25ICRGPW54MJG3T` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CBSSUBBWTD5AFNNSUULN63BEEB3VAQJLZB7Y3RNHG25ICRGPW54MJG3T) |
+| Token A (`TOKA`, SAC) | `CAZR7IWX52AXXC6CRQIZ2B7IRMRNEIS6Y2RN7TVWP5DKPB2OQD2HUVKH` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CAZR7IWX52AXXC6CRQIZ2B7IRMRNEIS6Y2RN7TVWP5DKPB2OQD2HUVKH) |
+| Token B (`TOKB`, SAC) | `CA3X7JAGC64YV55RCA64WEAVPJGY6PDM66JHFKNHPCDFHK7Z7RVLQ3ZD` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CA3X7JAGC64YV55RCA64WEAVPJGY6PDM66JHFKNHPCDFHK7Z7RVLQ3ZD) |
 
-State after the run above: `carol` seeded 1,000,000 TOKA / 4,000,000 TOKB
-and holds 1,999,000 LP shares (out of 2,000,000 total — 1,000 permanently
-locked, see [Minimum liquidity lock](#first-deposit-and-lp-share-pricing));
-`bob` then swapped 10,000 TOKA for **39,486 TOKB**
-(`quote_amount_out` returned the identical figure beforehand, and the
-realized `Swap` event confirms it), leaving reserves at
-`(1,010,000, 3,960,514)` — you can verify that's still `≥` the
-pre-swap product `1,000,000 × 4,000,000` net of the 0.3% fee by re-running
-`get_reserves` yourself. Selected transactions from that run:
+| Call | Effect | Transaction |
+|---|---|---|
+| `add_liquidity` | `bob` seeded 1,000,000 TOKA / 4,000,000 TOKB, minted 1,999,000 LP shares | [`6856098402a0eb...4754`](https://stellar.expert/explorer/testnet/tx/6856098402a0ebda3faaabfbf420c969db7b3171bdf6ddeb083225ae6c614754) |
+| `swap_exact_in` | `bob` swapped 10,000 TOKA for **39,486 TOKB** (matches `quote_amount_out`'s pre-trade quote and the [fee formula](#swaps) exactly) | [`baa7d8534fd4e3...a1`](https://stellar.expert/explorer/testnet/tx/baa7d8534fd4e38c219e3be8172ce10598b813bd89dd101048c795947a347ca1) |
 
-- [`initialize`](https://stellar.expert/explorer/testnet/tx/d10d8f768dfbc0068bcdf5ca2ab2f7f87dc017d850108277a915fb3b16910029)
-- [`add_liquidity`](https://stellar.expert/explorer/testnet/tx/160e6ad1bd5e19f5f385bc34d3c8c71d76174973eb6a7a2753c42d77e63f0fd6)
-- [`swap_exact_in`](https://stellar.expert/explorer/testnet/tx/9d601b1769c71d50eac1d5a9e6a2c32658025a7efb10883ab1a3a104db91b7a4)
+Post-swap reserves, confirmed via `get_reserves`: `(1,010,000, 3,960,514)`.
 
 This deployment is unaudited testnet software provided for demonstration —
 don't treat its live state as a recommendation to route real value through
