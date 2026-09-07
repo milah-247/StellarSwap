@@ -8,6 +8,7 @@ token pair — think Uniswap V2, ported to Soroban's storage and auth model.
 - **Contract:** [`src/lib.rs`](src/lib.rs) (`ConstantProductPool`)
 - **Tests:** [`src/test.rs`](src/test.rs) — 21 tests, `cargo test`
 - **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Live on testnet:** [`CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ`](https://stellar.expert/explorer/testnet/contract/CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ) — see [Live testnet deployment](#live-testnet-deployment)
 
 ## Contents
 
@@ -19,6 +20,7 @@ token pair — think Uniswap V2, ported to Soroban's storage and auth model.
 - [Events](#events)
 - [Building and testing](#building-and-testing)
 - [Deploying to Stellar testnet](#deploying-to-stellar-testnet)
+  - [Live testnet deployment](#live-testnet-deployment)
 - [Design notes and known limitations](#design-notes-and-known-limitations)
 
 ## Architecture
@@ -325,49 +327,84 @@ output.)
 ## Deploying to Stellar testnet
 
 These steps use the [Stellar CLI](https://developers.stellar.org/docs/tools/cli)
-(`stellar`, formerly `soroban-cli`) against `soroban-sdk = "26.1.0"`. Adjust
-versions if you're pinned to something else.
+(`stellar`, formerly `soroban-cli`) v28 against `soroban-sdk = "26.1.0"`.
+They were run start-to-finish against live testnet to produce the
+[deployed instance](#live-testnet-deployment) below — commands and output
+are exactly what that run used, not a hypothetical.
 
-### 1. Install the CLI and set up a funded testnet account
+### 1. Install the CLI and set up funded testnet accounts
 
 ```bash
-cargo install --locked stellar-cli --features opt
+# Prebuilt binary (faster) — grab the right asset for your OS/arch from
+# https://github.com/stellar/stellar-cli/releases/latest, e.g. for Linux x86_64:
+curl -sL -o stellar-cli.tar.gz \
+  https://github.com/stellar/stellar-cli/releases/download/v28.0.0/stellar-cli-28.0.0-x86_64-unknown-linux-gnu.tar.gz
+tar xzf stellar-cli.tar.gz && install -m 755 stellar ~/.local/bin/stellar
 
-stellar keys generate --global alice --network testnet --fund
-stellar keys generate --global bob --network testnet --fund
+# ...or build from source:
+# cargo install --locked stellar-cli --features opt
+
+stellar keys generate alice --network testnet --fund   # issuer + contract deployer
+stellar keys generate carol --network testnet --fund   # liquidity provider
+stellar keys generate bob   --network testnet --fund   # trader
 ```
 
-`--fund` uses testnet Friendbot to fund the new account automatically.
+`--fund` uses testnet Friendbot to fund the new account automatically. (In
+CLI versions before v28 this flag was combined with `--global`; v28
+dropped `--global` — identities are stored in `~/.config/stellar` either
+way.)
 
 ### 2. Get two test tokens on testnet
 
 Any two token contracts work. The simplest option is to deploy the
 [Stellar Asset Contract](https://developers.stellar.org/docs/tokens/stellar-asset-contract)
-wrapper for two Classic assets you control the issuer of:
+wrapper for two Classic assets issued by `alice`:
 
 ```bash
-# Issue two toy assets from alice's account, then wrap each as a SAC.
-stellar contract asset deploy \
-  --asset TOKA:$(stellar keys address alice) \
-  --source alice --network testnet
+ALICE=$(stellar keys address alice)
 
-stellar contract asset deploy \
-  --asset TOKB:$(stellar keys address alice) \
-  --source alice --network testnet
+stellar contract asset deploy --asset TOKA:$ALICE --source alice --network testnet --alias toka
+stellar contract asset deploy --asset TOKB:$ALICE --source alice --network testnet --alias tokb
 ```
 
 Each command prints the deployed SAC's contract ID — save them as
-`TOKEN_A_ID` / `TOKEN_B_ID`. Mint some to both `alice` and `bob` for
-testing with `stellar contract invoke --id $TOKEN_A_ID --source alice
---network testnet -- mint --to <address> --amount 1000000000` (repeat for
-`TOKEN_B_ID`; minting requires the issuer's signature, i.e. `--source
-alice`).
+`TOKEN_A_ID` / `TOKEN_B_ID`. Two things about Classic assets trip people up
+here, both enforced by the ledger itself rather than anything in this
+contract:
+
+- **The issuer can never hold its own asset** (minting to `alice` fails
+  with `operation invalid on issuer`) — so liquidity providers and traders
+  need to be *other* accounts, never the issuer.
+- **A non-issuer account needs a trustline before it can receive the
+  asset** at all — `mint` to an account with no trustline fails with
+  `trustline entry is missing for account`. Establish one per asset per
+  holder first:
+
+```bash
+for ACC in bob carol; do
+  for CODE in TOKA TOKB; do
+    stellar tx new change-trust --source $ACC --network testnet --line "$CODE:$ALICE"
+  done
+done
+```
+
+Then mint to `bob` and `carol` (minting requires the issuer's signature,
+i.e. `--source alice`):
+
+```bash
+BOB=$(stellar keys address bob)
+CAROL=$(stellar keys address carol)
+for TOK in toka tokb; do
+  stellar contract invoke --id $TOK --source alice --network testnet -- mint --to $BOB   --amount 1000000000
+  stellar contract invoke --id $TOK --source alice --network testnet -- mint --to $CAROL --amount 1000000000
+done
+```
 
 ### 3. Build and deploy the pool contract
 
 ```bash
 stellar contract build
-# equivalent to: cargo build --target wasm32v1-none --release
+# equivalent to: cargo build --target wasm32v1-none --release, plus wasm-opt
 
 stellar contract deploy \
   --wasm target/wasm32v1-none/release/stellarswap.wasm \
@@ -382,8 +419,8 @@ This prints the pool's contract ID (also reachable afterwards as `stellarswap_po
 stellar contract invoke --id stellarswap_pool --source alice --network testnet -- \
   initialize --token_a $TOKEN_A_ID --token_b $TOKEN_B_ID
 
-stellar contract invoke --id stellarswap_pool --source alice --network testnet -- \
-  add_liquidity --from $(stellar keys address alice) \
+stellar contract invoke --id stellarswap_pool --source carol --network testnet -- \
+  add_liquidity --from $CAROL \
   --amount_a_desired 1000000 --amount_b_desired 4000000 \
   --amount_a_min 0 --amount_b_min 0
 ```
@@ -392,15 +429,49 @@ stellar contract invoke --id stellarswap_pool --source alice --network testnet -
 
 ```bash
 stellar contract invoke --id stellarswap_pool --source bob --network testnet -- \
-  swap_exact_in --from $(stellar keys address bob) \
+  swap_exact_in --from $BOB \
   --token_in $TOKEN_A_ID --amount_in 10000 --min_amount_out 0 \
-  --to $(stellar keys address bob)
+  --to $BOB
 ```
 
 Drop `--min_amount_out 0` for a real deployment — that's disabling
 slippage protection for the demo. Query the pool's state at any time with
-read-only invokes, e.g. `stellar contract invoke --id stellarswap_pool
---network testnet -- get_reserves`.
+a read-only invoke — note `--source` is required even for reads in CLI
+v28, though it doesn't sign/submit anything:
+
+```bash
+stellar contract invoke --id stellarswap_pool --source alice --network testnet -- get_reserves
+```
+
+### Live testnet deployment
+
+The steps above were run against Stellar testnet on 2026-09-07. Everything
+below is a real, currently-live contract instance — click through to
+Stellar Expert to inspect it directly:
+
+| | Contract ID | Explorer |
+|---|---|---|
+| **Pool** (`ConstantProductPool`) | `CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CA3C2D2TUG4CWQJRU4AA35SUKXH6L72L4B5U3YOFTI3T7PXRF226OJSQ) |
+| Token A (`TOKA`, SAC) | `CCAI4UENTRZ4A27JEPLEB4E4EIUQDVCF5JWSLYEJYPSOAZYEDQJYAZ2M` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CCAI4UENTRZ4A27JEPLEB4E4EIUQDVCF5JWSLYEJYPSOAZYEDQJYAZ2M) |
+| Token B (`TOKB`, SAC) | `CC2VND6OK53S4NBHKDCU2QR3KA3HJJFB2H7APOJ6KKEB6JSMTUNNS3IT` | [stellar.expert](https://stellar.expert/explorer/testnet/contract/CC2VND6OK53S4NBHKDCU2QR3KA3HJJFB2H7APOJ6KKEB6JSMTUNNS3IT) |
+
+State after the run above: `carol` seeded 1,000,000 TOKA / 4,000,000 TOKB
+and holds 1,999,000 LP shares (out of 2,000,000 total — 1,000 permanently
+locked, see [Minimum liquidity lock](#first-deposit-and-lp-share-pricing));
+`bob` then swapped 10,000 TOKA for **39,486 TOKB**
+(`quote_amount_out` returned the identical figure beforehand, and the
+realized `Swap` event confirms it), leaving reserves at
+`(1,010,000, 3,960,514)` — you can verify that's still `≥` the
+pre-swap product `1,000,000 × 4,000,000` net of the 0.3% fee by re-running
+`get_reserves` yourself. Selected transactions from that run:
+
+- [`initialize`](https://stellar.expert/explorer/testnet/tx/d10d8f768dfbc0068bcdf5ca2ab2f7f87dc017d850108277a915fb3b16910029)
+- [`add_liquidity`](https://stellar.expert/explorer/testnet/tx/160e6ad1bd5e19f5f385bc34d3c8c71d76174973eb6a7a2753c42d77e63f0fd6)
+- [`swap_exact_in`](https://stellar.expert/explorer/testnet/tx/9d601b1769c71d50eac1d5a9e6a2c32658025a7efb10883ab1a3a104db91b7a4)
+
+This deployment is unaudited testnet software provided for demonstration —
+don't treat its live state as a recommendation to route real value through
+it, and expect it may be redeployed/reset without notice.
 
 ## Design notes and known limitations
 
